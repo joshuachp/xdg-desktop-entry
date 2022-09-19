@@ -57,4 +57,9 @@ mod test {
     fn shoul_parse_empty_comment() {
         assert_eq!(Ok(("", Line::Comment(Cow::from("#")))), parse_comment("#"))
     }
+
+    #[test]
+    fn shoul_parse_empty_line() {
+        assert_eq!(Ok(("", Line::EmptyLine)), parse_empty_line("\n"))
+    }
 }
