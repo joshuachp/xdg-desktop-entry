@@ -2,10 +2,10 @@ use std::borrow::Cow;
 
 use indexmap::IndexMap;
 use nom::{
-    character::complete::{char, line_ending, not_line_ending, satisfy},
+    character::complete::{char, line_ending, not_line_ending, satisfy, space0},
     combinator::{map, opt, recognize},
     multi::many1_count,
-    sequence::{delimited, pair},
+    sequence::{delimited, pair, separated_pair, tuple},
     IResult,
 };
 
@@ -46,12 +46,12 @@ fn parse_group_header(input: &str) -> IResult<&str, Cow<str>> {
             }))),
             pair(char(']'), opt(line_ending)),
         ),
-        |header| Cow::from(header),
+        Cow::from,
     )(input)
 }
 
-fn parse_entry(input: &str) -> IResult<&str, IndexMap<Key, Value>> {
-    todo!()
+fn parse_entry(input: &str) -> IResult<&str, (Key, Value)> {
+    separated_pair(parse_key, tuple((space0, char('='), space0)), parse_value)(input)
 }
 
 fn parse_key(input: &str) -> IResult<&str, Key> {
@@ -59,8 +59,12 @@ fn parse_key(input: &str) -> IResult<&str, Key> {
         recognize(many1_count(satisfy(|c| {
             c.is_ascii_alphanumeric() || c == '-'
         }))),
-        |key| Cow::from(key),
+        Cow::from,
     )(input)
+}
+
+fn parse_value(input: &str) -> IResult<&str, Value> {
+    map(not_line_ending, Cow::from)(input)
 }
 
 #[cfg(test)]
@@ -96,8 +100,12 @@ mod test {
     #[test]
     fn shoul_parse_entry() {
         assert_eq!(
-            Ok(("", Cow::from("header"))),
-            parse_group_header("[header]")
+            Ok(("", (Cow::from("Ke1"), Cow::from("Value")))),
+            parse_entry("Ke1=Value")
+        );
+        assert_eq!(
+            Ok(("", (Cow::from("Ke1"), Cow::from("Value")))),
+            parse_entry("Ke1 = Value")
         );
     }
 
