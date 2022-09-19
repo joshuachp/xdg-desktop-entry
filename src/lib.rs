@@ -2,12 +2,9 @@ use std::borrow::Cow;
 
 use indexmap::IndexMap;
 use nom::{
-    character::{
-        complete::{char, line_ending, none_of, not_line_ending, satisfy},
-        is_newline,
-    },
+    character::complete::{char, line_ending, not_line_ending, satisfy},
     combinator::{map, opt, recognize},
-    multi::{many0_count, many1_count},
+    multi::many1_count,
     sequence::{delimited, pair},
     IResult,
 };
@@ -18,12 +15,12 @@ enum Line<'a> {
     EmptyLine,
     Group {
         header: Cow<'a, str>,
-        entries: IndexMap<Key, Value>,
+        entries: IndexMap<Key<'a>, Value<'a>>,
     },
 }
 
-type Key = String;
-type Value = String;
+type Key<'a> = Cow<'a, str>;
+type Value<'a> = Cow<'a, str>;
 
 fn parse_comment(input: &str) -> IResult<&str, Line> {
     map(recognize(pair(char('#'), not_line_ending)), |comment| {
@@ -50,6 +47,19 @@ fn parse_group_header(input: &str) -> IResult<&str, Cow<str>> {
             pair(char(']'), opt(line_ending)),
         ),
         |header| Cow::from(header),
+    )(input)
+}
+
+fn parse_entry(input: &str) -> IResult<&str, IndexMap<Key, Value>> {
+    todo!()
+}
+
+fn parse_key(input: &str) -> IResult<&str, Key> {
+    map(
+        recognize(many1_count(satisfy(|c| {
+            c.is_ascii_alphanumeric() || c == '-'
+        }))),
+        |key| Cow::from(key),
     )(input)
 }
 
@@ -81,5 +91,18 @@ mod test {
             Ok(("", Cow::from("header"))),
             parse_group_header("[header]")
         );
+    }
+
+    #[test]
+    fn shoul_parse_entry() {
+        assert_eq!(
+            Ok(("", Cow::from("header"))),
+            parse_group_header("[header]")
+        );
+    }
+
+    #[test]
+    fn shoul_parse_key() {
+        assert_eq!(Ok(("", Cow::from("Ke1"))), parse_key("Ke1"));
     }
 }
