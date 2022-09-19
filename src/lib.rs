@@ -2,10 +2,13 @@ use std::borrow::Cow;
 
 use indexmap::IndexMap;
 use nom::{
-    character::complete::{char, line_ending, not_line_ending},
-    combinator::{map, recognize},
-    multi::many0_count,
-    sequence::pair,
+    character::{
+        complete::{char, line_ending, none_of, not_line_ending, satisfy},
+        is_newline,
+    },
+    combinator::{map, opt, recognize},
+    multi::{many0_count, many1_count},
+    sequence::{delimited, pair},
     IResult,
 };
 
@@ -38,7 +41,16 @@ fn parse_group(input: &str) -> IResult<&str, Line> {
 }
 
 fn parse_group_header(input: &str) -> IResult<&str, Cow<str>> {
-    todo!();
+    map(
+        delimited(
+            char('['),
+            recognize(many1_count(satisfy(|c| {
+                c.is_ascii() && !c.is_control() && c != '[' && c != ']'
+            }))),
+            pair(char(']'), opt(line_ending)),
+        ),
+        |header| Cow::from(header),
+    )(input)
 }
 
 #[cfg(test)]
@@ -61,5 +73,13 @@ mod test {
     #[test]
     fn shoul_parse_empty_line() {
         assert_eq!(Ok(("", Line::EmptyLine)), parse_empty_line("\n"))
+    }
+
+    #[test]
+    fn shoul_parse_group_header() {
+        assert_eq!(
+            Ok(("", Cow::from("header"))),
+            parse_group_header("[header]")
+        );
     }
 }
