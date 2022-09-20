@@ -1,10 +1,10 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, cell::Cell};
 
 use indexmap::IndexMap;
 use nom::{
     branch::alt,
     character::complete::{char, line_ending, not_line_ending, satisfy, space0},
-    combinator::{eof, map, peek, recognize},
+    combinator::{eof, map, peek, recognize, verify},
     multi::{fold_many0, many1_count},
     sequence::{delimited, pair, separated_pair, terminated, tuple},
     IResult,
@@ -18,13 +18,65 @@ enum Line<'a> {
     Entry { key: Key<'a>, value: Value<'a> },
 }
 
+struct Group<'a> {
+    header: Cow<'a, str>,
+    entries: EntryMap<'a, 'a>,
+}
+
 type Key<'a> = Cow<'a, str>;
 type Value<'a> = Cow<'a, str>;
 type EntryMap<'a, 'b> = IndexMap<Key<'a>, Value<'b>>;
 type DesktopEntry<'a, 'b, 'c> = IndexMap<Cow<'a, str>, EntryMap<'b, 'c>>;
 
 pub fn parse_desktop_entry(input: &str) -> IResult<&str, DesktopEntry> {
-    todo!()
+    let has_entry = Cell::new(true);
+
+    map(
+        fold_many0(
+            verify(parse_line, move |line| match line {
+                Line::GroupHeader(_) => {
+                    has_entry.set(true);
+
+                    true
+                }
+                Line::Entry { .. } => has_entry.get(),
+                _ => true,
+            }),
+            || (DesktopEntry::new(), None::<Group>),
+            |(mut document, mut group), line| {
+                match line {
+                    Line::Comment(_) => {
+                        // TODO: save comment lines
+                    }
+                    Line::EmptyLine => {
+                        // TODO: save empty lines (as comments?)
+                    }
+                    Line::GroupHeader(header) => {
+                        let old_group = group.replace(Group {
+                            header,
+                            entries: EntryMap::new(),
+                        });
+
+                        if let Some(group) = old_group {
+                            document.insert(group.header, group.entries);
+                        }
+                    }
+                    Line::Entry { key, value } => {
+                        group.as_mut().unwrap().entries.insert(key, value);
+                    }
+                }
+
+                (document, group)
+            },
+        ),
+        |(mut document, group)| {
+            if let Some(group) = group {
+                document.insert(group.header, group.entries);
+            }
+
+            document
+        },
+    )(input)
 }
 
 fn parse_line(input: &str) -> IResult<&str, Line> {
@@ -83,6 +135,7 @@ fn parse_value(input: &str) -> IResult<&str, Value> {
 #[cfg(test)]
 mod test {
     use indexmap::indexmap;
+    use pretty_assertions::assert_eq;
 
     use super::*;
 
@@ -139,7 +192,7 @@ mod test {
                 Cow::from("TryExec") => Cow::from("fooview"),
                 Cow::from("Exec") => Cow::from("fooview %F"),
                 Cow::from("Icon") => Cow::from("fooview"),
-                Cow::from("MimeType") => Cow::from("image/x-foo"),
+                Cow::from("MimeType") => Cow::from("image/x-foo;"),
                 Cow::from("Actions") => Cow::from("Gallery;Create;"),
             },
             Cow::from("Desktop Action Gallery") => indexmap! {
@@ -149,7 +202,7 @@ mod test {
             Cow::from("Desktop Action Create") => indexmap! {
                 Cow::from("Exec") => Cow::from("fooview --create-new"),
                 Cow::from("Name") => Cow::from("Create a new Foo!"),
-                Cow::from("Name") => Cow::from("fooview-new"),
+                Cow::from("Icon") => Cow::from("fooview-new"),
             },
         };
 
