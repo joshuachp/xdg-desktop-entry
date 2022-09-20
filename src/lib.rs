@@ -29,24 +29,27 @@ pub fn parse_desktop_entry(input: &str) -> IResult<&str, DesktopEntry> {
 
 fn parse_line(input: &str) -> IResult<&str, Line> {
     terminated(
-        alt((parse_comment, parse_empty_line, parse_group_header)),
+        alt((
+            map(parse_comment, Line::Comment),
+            map(peek_empty_line, |_| Line::EmptyLine),
+            map(parse_group_header, Line::GroupHeader),
+            map(parse_entry, |(key, value)| Line::Entry { key, value }),
+        )),
         alt((line_ending, eof)),
     )(input)
 }
 
 /// Parse the comment until the end of the line
-fn parse_comment(input: &str) -> IResult<&str, Line> {
-    map(recognize(pair(char('#'), not_line_ending)), |comment| {
-        Line::Comment(Cow::from(comment))
-    })(input)
+fn parse_comment(input: &str) -> IResult<&str, Cow<str>> {
+    map(recognize(pair(char('#'), not_line_ending)), Cow::from)(input)
 }
 
-/// Parses an empty line, peeks since the line is handled by [`parse_line`]
-fn parse_empty_line(input: &str) -> IResult<&str, Line> {
-    map(peek(line_ending), |_| Line::EmptyLine)(input)
+/// Parses an empty line, peeks since the line is handled by
+fn peek_empty_line(input: &str) -> IResult<&str, &str> {
+    peek(line_ending)(input)
 }
 
-fn parse_group_header(input: &str) -> IResult<&str, Line> {
+fn parse_group_header(input: &str) -> IResult<&str, Cow<str>> {
     map(
         delimited(
             char('['),
@@ -55,7 +58,7 @@ fn parse_group_header(input: &str) -> IResult<&str, Line> {
             }))),
             char(']'),
         ),
-        |header| Line::GroupHeader(Cow::from(header)),
+        Cow::from,
     )(input)
 }
 
@@ -85,26 +88,23 @@ mod test {
 
     #[test]
     fn shoul_parse_comment() {
-        assert_eq!(
-            Ok(("\n", Line::Comment(Cow::from("# Code")))),
-            parse_comment("# Code\n")
-        )
+        assert_eq!(Ok(("\n", Cow::from("# Code"))), parse_comment("# Code\n"))
     }
 
     #[test]
     fn shoul_parse_empty_comment() {
-        assert_eq!(Ok(("", Line::Comment(Cow::from("#")))), parse_comment("#"))
+        assert_eq!(Ok(("", Cow::from("#"))), parse_comment("#"))
     }
 
     #[test]
     fn shoul_parse_empty_line() {
-        assert_eq!(Ok(("\n", Line::EmptyLine)), parse_empty_line("\n"))
+        assert_eq!(Ok(("\n", "\n")), peek_empty_line("\n"))
     }
 
     #[test]
     fn shoul_parse_group_header() {
         assert_eq!(
-            Ok(("", Line::GroupHeader(Cow::from("header")))),
+            Ok(("", Cow::from("header"))),
             parse_group_header("[header]")
         );
     }
