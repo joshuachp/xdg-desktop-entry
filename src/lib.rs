@@ -23,10 +23,21 @@ struct Group<'a> {
     entries: EntryMap<'a, 'a>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Comment<'a> {
+    Comment(Cow<'a, str>),
+    EmptyLine,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DesktopEntry<'a> {
+    groups: IndexMap<Cow<'a, str>, EntryMap<'a, 'a>>,
+    comments: IndexMap<usize, Comment<'a>>,
+}
+
 type Key<'a> = Cow<'a, str>;
 type Value<'a> = Cow<'a, str>;
-type EntryMap<'a, 'b> = IndexMap<Key<'a>, Value<'b>>;
-type DesktopEntry<'a, 'b, 'c> = IndexMap<Cow<'a, str>, EntryMap<'b, 'c>>;
+pub type EntryMap<'a, 'b> = IndexMap<Key<'a>, Value<'b>>;
 
 pub fn parse_desktop_entry(input: &str) -> IResult<&str, DesktopEntry> {
     let has_entry = Cell::new(true);
@@ -42,14 +53,14 @@ pub fn parse_desktop_entry(input: &str) -> IResult<&str, DesktopEntry> {
                 Line::Entry { .. } => has_entry.get(),
                 _ => true,
             }),
-            || (DesktopEntry::new(), None::<Group>),
-            |(mut document, mut group), line| {
+            || (DesktopEntry::default(), None::<Group>, 0usize),
+            |(mut document, mut group, count), line| {
                 match line {
-                    Line::Comment(_) => {
-                        // TODO: save comment lines
+                    Line::Comment(comment) => {
+                        document.comments.insert(count, Comment::Comment(comment));
                     }
                     Line::EmptyLine => {
-                        // TODO: save empty lines (as comments?)
+                        document.comments.insert(count, Comment::EmptyLine);
                     }
                     Line::GroupHeader(header) => {
                         let old_group = group.replace(Group {
@@ -58,7 +69,7 @@ pub fn parse_desktop_entry(input: &str) -> IResult<&str, DesktopEntry> {
                         });
 
                         if let Some(group) = old_group {
-                            document.insert(group.header, group.entries);
+                            document.groups.insert(group.header, group.entries);
                         }
                     }
                     Line::Entry { key, value } => {
@@ -66,12 +77,12 @@ pub fn parse_desktop_entry(input: &str) -> IResult<&str, DesktopEntry> {
                     }
                 }
 
-                (document, group)
+                (document, group, count + 1)
             },
         ),
-        |(mut document, group)| {
+        |(mut document, group, _)| {
             if let Some(group) = group {
-                document.insert(group.header, group.entries);
+                document.groups.insert(group.header, group.entries);
             }
 
             document
@@ -183,26 +194,33 @@ mod test {
 
         assert_eq!("", rest);
 
-        let expected = indexmap! {
-            Cow::from("Desktop Entry") => indexmap! {
-                Cow::from("Version") => Cow::from("1.0"),
-                Cow::from("Type") => Cow::from("Application"),
-                Cow::from("Name") => Cow::from("Foo Viewer"),
-                Cow::from("Comment") => Cow::from("The best viewer for Foo objects available!"),
-                Cow::from("TryExec") => Cow::from("fooview"),
-                Cow::from("Exec") => Cow::from("fooview %F"),
-                Cow::from("Icon") => Cow::from("fooview"),
-                Cow::from("MimeType") => Cow::from("image/x-foo;"),
-                Cow::from("Actions") => Cow::from("Gallery;Create;"),
+        let expected = DesktopEntry {
+            groups: indexmap! {
+                Cow::from("Desktop Entry") => indexmap! {
+                    Cow::from("Version") => Cow::from("1.0"),
+                    Cow::from("Type") => Cow::from("Application"),
+                    Cow::from("Name") => Cow::from("Foo Viewer"),
+                    Cow::from("Comment") => Cow::from("The best viewer for Foo objects available!"),
+                    Cow::from("TryExec") => Cow::from("fooview"),
+                    Cow::from("Exec") => Cow::from("fooview %F"),
+                    Cow::from("Icon") => Cow::from("fooview"),
+                    Cow::from("MimeType") => Cow::from("image/x-foo;"),
+                    Cow::from("Actions") => Cow::from("Gallery;Create;"),
+                },
+                Cow::from("Desktop Action Gallery") => indexmap! {
+                    Cow::from("Exec") => Cow::from("fooview --gallery"),
+                    Cow::from("Name") => Cow::from("Browse Gallery"),
+                },
+                Cow::from("Desktop Action Create") => indexmap! {
+                    Cow::from("Exec") => Cow::from("fooview --create-new"),
+                    Cow::from("Name") => Cow::from("Create a new Foo!"),
+                    Cow::from("Icon") => Cow::from("fooview-new"),
+                },
             },
-            Cow::from("Desktop Action Gallery") => indexmap! {
-                Cow::from("Exec") => Cow::from("fooview --gallery"),
-                Cow::from("Name") => Cow::from("Browse Gallery"),
-            },
-            Cow::from("Desktop Action Create") => indexmap! {
-                Cow::from("Exec") => Cow::from("fooview --create-new"),
-                Cow::from("Name") => Cow::from("Create a new Foo!"),
-                Cow::from("Icon") => Cow::from("fooview-new"),
+            comments: indexmap! {
+                0 => Comment::Comment(Cow::from("# Example file from the spec")),
+                11 => Comment::EmptyLine,
+                15 => Comment::EmptyLine,
             },
         };
 
