@@ -23,6 +23,7 @@ struct Group<'a> {
     entries: EntryMap<'a, 'a>,
 }
 
+#[cfg(feature = "keep-comments")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Comment<'a> {
     Comment(Cow<'a, str>),
@@ -32,6 +33,7 @@ enum Comment<'a> {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DesktopEntry<'a> {
     groups: IndexMap<Cow<'a, str>, EntryMap<'a, 'a>>,
+    #[cfg(feature = "keep-comments")]
     comments: IndexMap<usize, Comment<'a>>,
 }
 
@@ -54,31 +56,7 @@ pub fn parse_desktop_entry(input: &str) -> IResult<&str, DesktopEntry> {
                 _ => true,
             }),
             || (DesktopEntry::default(), None::<Group>, 0usize),
-            |(mut document, mut group, count), line| {
-                match line {
-                    Line::Comment(comment) => {
-                        document.comments.insert(count, Comment::Comment(comment));
-                    }
-                    Line::EmptyLine => {
-                        document.comments.insert(count, Comment::EmptyLine);
-                    }
-                    Line::GroupHeader(header) => {
-                        let old_group = group.replace(Group {
-                            header,
-                            entries: EntryMap::new(),
-                        });
-
-                        if let Some(group) = old_group {
-                            document.groups.insert(group.header, group.entries);
-                        }
-                    }
-                    Line::Entry { key, value } => {
-                        group.as_mut().unwrap().entries.insert(key, value);
-                    }
-                }
-
-                (document, group, count + 1)
-            },
+            map_document_line,
         ),
         |(mut document, group, _)| {
             if let Some(group) = group {
@@ -88,6 +66,61 @@ pub fn parse_desktop_entry(input: &str) -> IResult<&str, DesktopEntry> {
             document
         },
     )(input)
+}
+
+#[cfg(feature = "keep-comments")]
+fn map_document_line<'a>(
+    (mut document, mut group, count): (DesktopEntry<'a>, Option<Group<'a>>, usize),
+    line: Line<'a>,
+) -> (DesktopEntry<'a>, Option<Group<'a>>, usize) {
+    match line {
+        Line::Comment(comment) => {
+            document.comments.insert(count, Comment::Comment(comment));
+        }
+        Line::EmptyLine => {
+            document.comments.insert(count, Comment::EmptyLine);
+        }
+        Line::GroupHeader(header) => {
+            let old_group = group.replace(Group {
+                header,
+                entries: EntryMap::new(),
+            });
+
+            if let Some(group) = old_group {
+                document.groups.insert(group.header, group.entries);
+            }
+        }
+        Line::Entry { key, value } => {
+            group.as_mut().unwrap().entries.insert(key, value);
+        }
+    }
+
+    (document, group, count + 1)
+}
+
+#[cfg(not(feature = "keep-comments"))]
+fn map_document_line<'a>(
+    (mut document, mut group, count): (DesktopEntry<'a>, Option<Group<'a>>, usize),
+    line: Line<'a>,
+) -> (DesktopEntry<'a>, Option<Group<'a>>, usize) {
+    match line {
+        Line::GroupHeader(header) => {
+            let old_group = group.replace(Group {
+                header,
+                entries: EntryMap::new(),
+            });
+
+            if let Some(group) = old_group {
+                document.groups.insert(group.header, group.entries);
+            }
+        }
+        Line::Entry { key, value } => {
+            group.as_mut().unwrap().entries.insert(key, value);
+        }
+        Line::Comment(_) | Line::EmptyLine => {}
+    }
+
+    (document, group, count + 1)
 }
 
 fn parse_line(input: &str) -> IResult<&str, Line> {
@@ -186,8 +219,34 @@ mod test {
         assert_eq!(Ok(("", Cow::from("Ke1"))), parse_key("Ke1"));
     }
 
+    fn example_file_groups() -> IndexMap<Cow<'static, str>, EntryMap<'static, 'static>> {
+        indexmap! {
+            Cow::from("Desktop Entry") => indexmap! {
+                Cow::from("Version") => Cow::from("1.0"),
+                Cow::from("Type") => Cow::from("Application"),
+                Cow::from("Name") => Cow::from("Foo Viewer"),
+                Cow::from("Comment") => Cow::from("The best viewer for Foo objects available!"),
+                Cow::from("TryExec") => Cow::from("fooview"),
+                Cow::from("Exec") => Cow::from("fooview %F"),
+                Cow::from("Icon") => Cow::from("fooview"),
+                Cow::from("MimeType") => Cow::from("image/x-foo;"),
+                Cow::from("Actions") => Cow::from("Gallery;Create;"),
+            },
+            Cow::from("Desktop Action Gallery") => indexmap! {
+                Cow::from("Exec") => Cow::from("fooview --gallery"),
+                Cow::from("Name") => Cow::from("Browse Gallery"),
+            },
+            Cow::from("Desktop Action Create") => indexmap! {
+                Cow::from("Exec") => Cow::from("fooview --create-new"),
+                Cow::from("Name") => Cow::from("Create a new Foo!"),
+                Cow::from("Icon") => Cow::from("fooview-new"),
+            },
+        }
+    }
+
+    #[cfg(feature = "keep-comments")]
     #[test]
-    fn should_parse_example_file() {
+    fn should_parse_example_file_with_comments() {
         let example_file = include_str!("../example/file.desktop");
 
         let (rest, desktop_entry) = parse_desktop_entry(example_file).unwrap();
@@ -195,33 +254,28 @@ mod test {
         assert_eq!("", rest);
 
         let expected = DesktopEntry {
-            groups: indexmap! {
-                Cow::from("Desktop Entry") => indexmap! {
-                    Cow::from("Version") => Cow::from("1.0"),
-                    Cow::from("Type") => Cow::from("Application"),
-                    Cow::from("Name") => Cow::from("Foo Viewer"),
-                    Cow::from("Comment") => Cow::from("The best viewer for Foo objects available!"),
-                    Cow::from("TryExec") => Cow::from("fooview"),
-                    Cow::from("Exec") => Cow::from("fooview %F"),
-                    Cow::from("Icon") => Cow::from("fooview"),
-                    Cow::from("MimeType") => Cow::from("image/x-foo;"),
-                    Cow::from("Actions") => Cow::from("Gallery;Create;"),
-                },
-                Cow::from("Desktop Action Gallery") => indexmap! {
-                    Cow::from("Exec") => Cow::from("fooview --gallery"),
-                    Cow::from("Name") => Cow::from("Browse Gallery"),
-                },
-                Cow::from("Desktop Action Create") => indexmap! {
-                    Cow::from("Exec") => Cow::from("fooview --create-new"),
-                    Cow::from("Name") => Cow::from("Create a new Foo!"),
-                    Cow::from("Icon") => Cow::from("fooview-new"),
-                },
-            },
+            groups: example_file_groups(),
             comments: indexmap! {
                 0 => Comment::Comment(Cow::from("# Example file from the spec")),
                 11 => Comment::EmptyLine,
                 15 => Comment::EmptyLine,
             },
+        };
+
+        assert_eq!(expected, desktop_entry)
+    }
+
+    #[cfg(not(feature = "keep-comments"))]
+    #[test]
+    fn should_parse_example_file_with_comments() {
+        let example_file = include_str!("../example/file.desktop");
+
+        let (rest, desktop_entry) = parse_desktop_entry(example_file).unwrap();
+
+        assert_eq!("", rest);
+
+        let expected = DesktopEntry {
+            groups: example_file_groups(),
         };
 
         assert_eq!(expected, desktop_entry)
