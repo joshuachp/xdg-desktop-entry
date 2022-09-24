@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use nom::{
     branch::alt,
     character::complete::{char, line_ending, not_line_ending, satisfy, space0, space1},
-    combinator::{eof, map, peek, recognize, verify},
+    combinator::{cut, eof, map, peek, recognize, verify},
     multi::{fold_many0, many1_count},
     sequence::{delimited, pair, separated_pair, terminated, tuple},
     IResult,
@@ -44,27 +44,30 @@ pub type EntryMap<'a, 'b> = IndexMap<Key<'a>, Value<'b>>;
 pub fn parse_desktop_entry(input: &str) -> IResult<&str, DesktopEntry> {
     let has_entry = Cell::new(true);
 
-    map(
-        fold_many0(
-            verify(parse_line, move |line| match line {
-                Line::GroupHeader(_) => {
-                    has_entry.set(true);
+    terminated(
+        map(
+            fold_many0(
+                verify(parse_line, move |line| match line {
+                    Line::GroupHeader(_) => {
+                        has_entry.set(true);
 
-                    true
+                        true
+                    }
+                    Line::Entry { .. } => has_entry.get(),
+                    _ => true,
+                }),
+                || (DesktopEntry::default(), None::<Group>, 0usize),
+                map_document_line,
+            ),
+            |(mut document, group, _)| {
+                if let Some(group) = group {
+                    document.groups.insert(group.header, group.entries);
                 }
-                Line::Entry { .. } => has_entry.get(),
-                _ => true,
-            }),
-            || (DesktopEntry::default(), None::<Group>, 0usize),
-            map_document_line,
-        ),
-        |(mut document, group, _)| {
-            if let Some(group) = group {
-                document.groups.insert(group.header, group.entries);
-            }
 
-            document
-        },
+                document
+            },
+        ),
+        eof,
     )(input)
 }
 
@@ -165,10 +168,12 @@ fn parse_group_header(input: &str) -> IResult<&str, Cow<str>> {
     map(
         delimited(
             char('['),
-            recognize(many1_count(satisfy(|c| {
+            // Fail for missing header content
+            recognize(cut(many1_count(satisfy(|c| {
                 c.is_ascii() && !c.is_control() && c != '[' && c != ']'
-            }))),
-            char(']'),
+            })))),
+            // If an ope `[` is not close fail the parser
+            cut(char(']')),
         ),
         Cow::from,
     )(input)
