@@ -3,8 +3,8 @@ use std::{borrow::Cow, cell::Cell};
 use indexmap::IndexMap;
 use nom::{
     branch::alt,
-    character::complete::{char, line_ending, not_line_ending, satisfy, space0},
-    combinator::{eof, map, peek, recognize, verify},
+    character::complete::{char, line_ending, not_line_ending, satisfy, space0, space1},
+    combinator::{eof, map, opt, peek, recognize, verify},
     multi::{fold_many0, many1_count},
     sequence::{delimited, pair, separated_pair, terminated, tuple},
     IResult,
@@ -13,7 +13,7 @@ use nom::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Line<'a> {
     Comment(Cow<'a, str>),
-    EmptyLine,
+    EmptyLine { white_space: Option<Cow<'a, str>> },
     GroupHeader(Cow<'a, str>),
     Entry { key: Key<'a>, value: Value<'a> },
 }
@@ -27,7 +27,7 @@ struct Group<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Comment<'a> {
     Comment(Cow<'a, str>),
-    EmptyLine,
+    EmptyLine { white_space: Option<Cow<'a, str>> },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -77,8 +77,10 @@ fn map_document_line<'a>(
         Line::Comment(comment) => {
             document.comments.insert(count, Comment::Comment(comment));
         }
-        Line::EmptyLine => {
-            document.comments.insert(count, Comment::EmptyLine);
+        Line::EmptyLine { white_space } => {
+            document
+                .comments
+                .insert(count, Comment::EmptyLine { white_space });
         }
         Line::GroupHeader(header) => {
             let old_group = group.replace(Group {
@@ -117,7 +119,7 @@ fn map_document_line<'a>(
         Line::Entry { key, value } => {
             group.as_mut().unwrap().entries.insert(key, value);
         }
-        Line::Comment(_) | Line::EmptyLine => {}
+        Line::Comment(_) | Line::EmptyLine(..) => {}
     }
 
     (document, group, count + 1)
@@ -127,7 +129,9 @@ fn parse_line(input: &str) -> IResult<&str, Line> {
     terminated(
         alt((
             map(parse_comment, Line::Comment),
-            map(peek_empty_line, |_| Line::EmptyLine),
+            map(peek_empty_line, |white_space| Line::EmptyLine {
+                white_space,
+            }),
             map(parse_group_header, Line::GroupHeader),
             map(parse_entry, |(key, value)| Line::Entry { key, value }),
         )),
@@ -140,9 +144,11 @@ fn parse_comment(input: &str) -> IResult<&str, Cow<str>> {
     map(recognize(pair(char('#'), not_line_ending)), Cow::from)(input)
 }
 
-/// Parses an empty line, peeks since the line is handled by
-fn peek_empty_line(input: &str) -> IResult<&str, &str> {
-    peek(line_ending)(input)
+/// Parses an empty line, peeks since the line is handled by [`parse_line`].
+///
+/// It will consider lines with only whitespace as empty lines.
+fn peek_empty_line(input: &str) -> IResult<&str, Option<Cow<str>>> {
+    terminated(opt(map(space1, Cow::from)), peek(line_ending))(input)
 }
 
 fn parse_group_header(input: &str) -> IResult<&str, Cow<str>> {
@@ -195,7 +201,7 @@ mod test {
 
     #[test]
     fn shoul_parse_empty_line() {
-        assert_eq!(Ok(("\n", "\n")), peek_empty_line("\n"))
+        assert_eq!(Ok(("\n", None)), peek_empty_line("\n"))
     }
 
     #[test]
@@ -257,8 +263,8 @@ mod test {
             groups: example_file_groups(),
             comments: indexmap! {
                 0 => Comment::Comment(Cow::from("# Example file from the spec")),
-                11 => Comment::EmptyLine,
-                15 => Comment::EmptyLine,
+                11 => Comment::EmptyLine{white_space:None},
+                15 => Comment::EmptyLine{white_space: None},
             },
         };
 
