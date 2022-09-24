@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 use nom::{
     branch::alt,
     character::complete::{char, line_ending, not_line_ending, satisfy, space0, space1},
-    combinator::{eof, map, opt, peek, recognize, verify},
+    combinator::{eof, map, peek, recognize, verify},
     multi::{fold_many0, many1_count},
     sequence::{delimited, pair, separated_pair, terminated, tuple},
     IResult,
@@ -119,7 +119,7 @@ fn map_document_line<'a>(
         Line::Entry { key, value } => {
             group.as_mut().unwrap().entries.insert(key, value);
         }
-        Line::Comment(_) | Line::EmptyLine(..) => {}
+        Line::Comment(_) | Line::EmptyLine { .. } => {}
     }
 
     (document, group, count + 1)
@@ -129,14 +129,18 @@ fn parse_line(input: &str) -> IResult<&str, Line> {
     terminated(
         alt((
             map(parse_comment, Line::Comment),
-            map(peek_empty_line, |white_space| Line::EmptyLine {
-                white_space,
-            }),
             map(parse_group_header, Line::GroupHeader),
             map(parse_entry, |(key, value)| Line::Entry { key, value }),
+            map(parse_empty_line, |white_space| Line::EmptyLine {
+                white_space,
+            }),
         )),
-        alt((line_ending, eof)),
+        parse_end_of_line,
     )(input)
+}
+
+fn parse_end_of_line(input: &str) -> IResult<&str, &str> {
+    alt((line_ending, eof))(input)
 }
 
 /// Parse the comment until the end of the line
@@ -147,8 +151,14 @@ fn parse_comment(input: &str) -> IResult<&str, Cow<str>> {
 /// Parses an empty line, peeks since the line is handled by [`parse_line`].
 ///
 /// It will consider lines with only whitespace as empty lines.
-fn peek_empty_line(input: &str) -> IResult<&str, Option<Cow<str>>> {
-    terminated(opt(map(space1, Cow::from)), peek(line_ending))(input)
+fn parse_empty_line(input: &str) -> IResult<&str, Option<Cow<str>>> {
+    alt((
+        terminated(
+            map(space1, |white_space| Some(Cow::from(white_space))),
+            peek(parse_end_of_line),
+        ),
+        map(peek(line_ending), |_| None),
+    ))(input)
 }
 
 fn parse_group_header(input: &str) -> IResult<&str, Cow<str>> {
@@ -201,7 +211,12 @@ mod test {
 
     #[test]
     fn shoul_parse_empty_line() {
-        assert_eq!(Ok(("\n", None)), peek_empty_line("\n"))
+        assert_eq!(Ok(("\n", None)), parse_empty_line("\n"))
+    }
+
+    #[test]
+    fn shoul_parse_empty_line_whitespace() {
+        assert_eq!(Ok(("\n", Some(Cow::from("  ")))), parse_empty_line("  \n"))
     }
 
     #[test]
