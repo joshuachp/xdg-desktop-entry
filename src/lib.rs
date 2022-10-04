@@ -3,12 +3,28 @@ use std::{borrow::Cow, cell::Cell};
 use indexmap::IndexMap;
 use nom::{
     branch::alt,
+    bytes::complete::tag,
     character::complete::{char, line_ending, not_line_ending, satisfy, space0, space1},
-    combinator::{cut, eof, map, peek, recognize, verify},
+    combinator::{cut, eof, map, map_parser, peek, recognize, value, verify},
     multi::{fold_many0, many1_count},
+    number::complete::float,
     sequence::{delimited, pair, separated_pair, terminated, tuple},
     IResult,
 };
+
+const ESCAPE_CHAR: char = '\\';
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value<'a> {
+    String(Cow<'a, str>),
+    LocaleString(Cow<'a, str>),
+    // TODO: parse icon-string
+    // IconString(Cow<'a, str>),
+    Boolean(bool),
+    Numeric(f32),
+}
+
+impl<'a> Eq for Value<'a> {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Line<'a> {
@@ -38,9 +54,13 @@ pub struct DesktopEntry<'a> {
 }
 
 type Key<'a> = Cow<'a, str>;
-type Value<'a> = Cow<'a, str>;
 pub type EntryMap<'a, 'b> = IndexMap<Key<'a>, Value<'b>>;
 
+/// Parses a desktop file.
+///
+/// # Errors
+///
+/// Invalid or malformed desktop file.
 pub fn parse_desktop_entry(input: &str) -> IResult<&str, DesktopEntry> {
     let has_entry = Cell::new(true);
 
@@ -194,7 +214,95 @@ fn parse_key(input: &str) -> IResult<&str, Key> {
 
 /// Parse all the characters until the line ending
 fn parse_value(input: &str) -> IResult<&str, Value> {
-    map(not_line_ending, Cow::from)(input)
+    alt((
+        map(parse_boolean, Value::Boolean),
+        map(parse_numeric, Value::Numeric),
+        map(parse_string, Value::String),
+        map(parse_local_string, Value::LocaleString),
+    ))(input)
+}
+
+fn escaped_chars(input: char) -> Option<&'static str> {
+    let escaped = match input {
+        's' => " ",
+        'n' => "\n",
+        't' => "\t",
+        'r' => "\r",
+        '\\' => "\\",
+        ';' => ";",
+        _ => {
+            return None;
+        }
+    };
+
+    Some(escaped)
+}
+
+fn parse_escaped_string(input: &str) -> IResult<&str, Cow<str>> {
+    let mut iter = input.chars().enumerate();
+
+    while let Some((i, c)) = iter.next() {
+        if c == ESCAPE_CHAR {
+            let escaped = iter
+                .next()
+                .and_then(|(_, escaped)| escaped_chars(escaped))
+                .ok_or_else(|| {
+                    nom::Err::Error(nom::error::Error::new(
+                        input,
+                        nom::error::ErrorKind::Escaped,
+                    ))
+                })?;
+
+            let mut escaped_string = String::with_capacity(input.len());
+            escaped_string.push_str(&input[..i]);
+            escaped_string.push_str(escaped);
+
+            let mut iter = input[i + 1..].chars();
+            while let Some(c) = iter.next() {
+                if c == ESCAPE_CHAR {
+                    let escaped = iter.next().and_then(escaped_chars).ok_or_else(|| {
+                        nom::Err::Error(nom::error::Error::new(
+                            input,
+                            nom::error::ErrorKind::Escaped,
+                        ))
+                    })?;
+
+                    escaped_string.push_str(escaped);
+                } else {
+                    escaped_string.push(c);
+                }
+            }
+
+            return Ok(("", Cow::Owned(escaped_string)));
+        }
+    }
+
+    Ok(("", Cow::Borrowed(input)))
+}
+
+fn parse_string(input: &str) -> IResult<&str, Cow<str>> {
+    map(
+        verify(
+            map_parser(not_line_ending, parse_escaped_string),
+            str::is_ascii,
+        ),
+        Cow::from,
+    )(input)
+}
+
+fn parse_local_string(input: &str) -> IResult<&str, Cow<str>> {
+    map(map_parser(not_line_ending, parse_escaped_string), Cow::from)(input)
+}
+
+fn parse_boolean(input: &str) -> IResult<&str, bool> {
+    map_parser(
+        not_line_ending,
+        alt((value(true, tag("true")), value(false, tag("false")))),
+    )(input)
+}
+
+fn parse_numeric(input: &str) -> IResult<&str, f32> {
+    float(input)
 }
 
 #[cfg(test)]
@@ -235,7 +343,7 @@ mod test {
     #[test]
     fn shoul_parse_entry() {
         assert_eq!(
-            Ok(("", (Cow::from("Ke1"), Cow::from("Value")))),
+            Ok(("", (Cow::from("Ke1"), Value::String(Cow::from("Value"))))),
             parse_entry("Ke1=Value")
         );
     }
@@ -248,24 +356,24 @@ mod test {
     fn example_file_groups() -> IndexMap<Cow<'static, str>, EntryMap<'static, 'static>> {
         indexmap! {
             Cow::from("Desktop Entry") => indexmap! {
-                Cow::from("Version") => Cow::from("1.0"),
-                Cow::from("Type") => Cow::from("Application"),
-                Cow::from("Name") => Cow::from("Foo Viewer"),
-                Cow::from("Comment") => Cow::from("The best viewer for Foo objects available!"),
-                Cow::from("TryExec") => Cow::from("fooview"),
-                Cow::from("Exec") => Cow::from("fooview %F"),
-                Cow::from("Icon") => Cow::from("fooview"),
-                Cow::from("MimeType") => Cow::from("image/x-foo;"),
-                Cow::from("Actions") => Cow::from("Gallery;Create;"),
+                Cow::from("Version") => Value::Numeric(1.0),
+                Cow::from("Type") => Value::String(Cow::from("Application")),
+                Cow::from("Name") => Value::String(Cow::from("Foo Viewer")),
+                Cow::from("Comment") => Value::String(Cow::from("The best viewer for Foo objects available!")),
+                Cow::from("TryExec") => Value::String(Cow::from("fooview")),
+                Cow::from("Exec") => Value::String(Cow::from("fooview %F")),
+                Cow::from("Icon") => Value::String(Cow::from("fooview")),
+                Cow::from("MimeType") => Value::String(Cow::from("image/x-foo;")),
+                Cow::from("Actions") => Value::String(Cow::from("Gallery;Create;")),
             },
             Cow::from("Desktop Action Gallery") => indexmap! {
-                Cow::from("Exec") => Cow::from("fooview --gallery"),
-                Cow::from("Name") => Cow::from("Browse Gallery"),
+                Cow::from("Exec") => Value::String(Cow::from("fooview --gallery")),
+                Cow::from("Name") => Value::String(Cow::from("Browse Gallery")),
             },
             Cow::from("Desktop Action Create") => indexmap! {
-                Cow::from("Exec") => Cow::from("fooview --create-new"),
-                Cow::from("Name") => Cow::from("Create a new Foo!"),
-                Cow::from("Icon") => Cow::from("fooview-new"),
+                Cow::from("Exec") => Value::String(Cow::from("fooview --create-new")),
+                Cow::from("Name") => Value::String(Cow::from("Create a new Foo!")),
+                Cow::from("Icon") => Value::String(Cow::from("fooview-new")),
             },
         }
     }
@@ -305,5 +413,12 @@ mod test {
         };
 
         assert_eq!(expected, desktop_entry)
+    }
+
+    #[test]
+    fn should_parse_string() {
+        assert_eq!(Ok(("", Cow::from("foo bar"))), parse_string("foo bar"));
+
+        assert_eq!(Ok(("", Cow::from("foo 'bar'"))), parse_string("foo 'bar'"));
     }
 }
