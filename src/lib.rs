@@ -257,7 +257,7 @@ fn parse_escaped_string(input: &str) -> IResult<&str, Cow<str>> {
             escaped_string.push_str(&input[..i]);
             escaped_string.push_str(escaped);
 
-            let mut iter = input[i + 1..].chars();
+            let mut iter = input[i + 2..].chars();
             while let Some(c) = iter.next() {
                 if c == ESCAPE_CHAR {
                     let escaped = iter.next().and_then(escaped_chars).ok_or_else(|| {
@@ -283,7 +283,7 @@ fn parse_escaped_string(input: &str) -> IResult<&str, Cow<str>> {
 fn parse_string(input: &str) -> IResult<&str, Cow<str>> {
     map(
         verify(
-            map_parser(not_line_ending, parse_escaped_string),
+            map_parser(not_line_ending, cut(parse_escaped_string)),
             str::is_ascii,
         ),
         Cow::from,
@@ -291,7 +291,10 @@ fn parse_string(input: &str) -> IResult<&str, Cow<str>> {
 }
 
 fn parse_local_string(input: &str) -> IResult<&str, Cow<str>> {
-    map(map_parser(not_line_ending, parse_escaped_string), Cow::from)(input)
+    map(
+        map_parser(not_line_ending, cut(parse_escaped_string)),
+        Cow::from,
+    )(input)
 }
 
 fn parse_boolean(input: &str) -> IResult<&str, bool> {
@@ -302,7 +305,7 @@ fn parse_boolean(input: &str) -> IResult<&str, bool> {
 }
 
 fn parse_numeric(input: &str) -> IResult<&str, f32> {
-    float(input)
+    map_parser(not_line_ending, float)(input)
 }
 
 #[cfg(test)]
@@ -420,5 +423,36 @@ mod test {
         assert_eq!(Ok(("", Cow::from("foo bar"))), parse_string("foo bar"));
 
         assert_eq!(Ok(("", Cow::from("foo 'bar'"))), parse_string("foo 'bar'"));
+    }
+
+    #[test]
+    fn should_parse_escaped_string() {
+        assert_eq!(Ok(("", Cow::from("foo \nbar"))), parse_string("foo \\nbar"));
+
+        assert_eq!(
+            Ok(("", Cow::from("foo \t bar"))),
+            parse_string("foo \\t\\sbar")
+        );
+
+        assert_eq!(Ok(("", Cow::from("foo;bar"))), parse_string("foo\\;bar"));
+    }
+
+    #[test]
+    fn should_parse_value() {
+        assert_eq!(
+            Ok(("", Value::String(Cow::from("foo \nbar")))),
+            parse_value("foo \\nbar")
+        );
+
+        assert_eq!(Ok(("\nas", Value::Boolean(true))), parse_value("true\nas"));
+        assert_eq!(
+            Ok(("\nas", Value::Boolean(false))),
+            parse_value("false\nas")
+        );
+
+        assert_eq!(Ok(("\nas", Value::Numeric(1.))), parse_value("1\nas"));
+        assert_eq!(Ok(("\nas", Value::Numeric(4.2))), parse_value("4.20\nas"));
+        // FIX: this is will not pass
+        // assert_eq!(Ok(("\nas", Value::Numeric(4.2))), parse_value("4,20\nas"));
     }
 }
