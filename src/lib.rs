@@ -5,14 +5,31 @@ use nom::{
     branch::alt,
     bytes::complete::tag,
     character::complete::{char, line_ending, not_line_ending, satisfy, space0, space1},
-    combinator::{cut, eof, map, map_parser, peek, recognize, value, verify},
+    combinator::{cut, eof, map, map_parser, opt, peek, recognize, value, verify},
     multi::{fold_many0, many1_count},
     number::complete::float,
-    sequence::{delimited, pair, separated_pair, terminated, tuple},
+    sequence::{delimited, pair, preceded, separated_pair, terminated, tuple},
     IResult,
 };
 
 const ESCAPE_CHAR: char = '\\';
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Key<'a> {
+    Simple(Cow<'a, str>),
+    Localized {
+        key: Cow<'a, str>,
+        locale: Locale<'a>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Locale<'a> {
+    lang: Cow<'a, str>,
+    country: Option<Cow<'a, str>>,
+    encoding: Option<Cow<'a, str>>,
+    modifier: Option<Cow<'a, str>>,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value<'a> {
@@ -53,7 +70,6 @@ pub struct DesktopEntry<'a> {
     comments: IndexMap<usize, Comment<'a>>,
 }
 
-type Key<'a> = Cow<'a, str>;
 pub type EntryMap<'a, 'b> = IndexMap<Key<'a>, Value<'b>>;
 
 /// Parses a desktop file.
@@ -205,6 +221,36 @@ fn parse_entry(input: &str) -> IResult<&str, (Key, Value)> {
 
 fn parse_key(input: &str) -> IResult<&str, Key> {
     map(
+        pair(
+            parse_key_part,
+            opt(delimited(char('['), parse_key_locale, char(']'))),
+        ),
+        |(key, opt_locale)| match opt_locale {
+            Some(locale) => Key::Localized { key, locale },
+            None => Key::Simple(key),
+        },
+    )(input)
+}
+
+fn parse_key_locale(input: &str) -> IResult<&str, Locale> {
+    map(
+        tuple((
+            parse_key_part,
+            opt(preceded(char('_'), parse_key_part)),
+            opt(preceded(char('.'), parse_key_part)),
+            opt(preceded(char('@'), parse_key_part)),
+        )),
+        |(lang, country, encoding, modifier)| Locale {
+            lang,
+            country,
+            encoding,
+            modifier,
+        },
+    )(input)
+}
+
+fn parse_key_part(input: &str) -> IResult<&str, Cow<str>> {
+    map(
         recognize(many1_count(satisfy(|c| {
             c.is_ascii_alphanumeric() || c == '-'
         }))),
@@ -346,37 +392,43 @@ mod test {
     #[test]
     fn shoul_parse_entry() {
         assert_eq!(
-            Ok(("", (Cow::from("Ke1"), Value::String(Cow::from("Value"))))),
+            Ok((
+                "",
+                (
+                    Key::Simple(Cow::from("Ke1")),
+                    Value::String(Cow::from("Value"))
+                )
+            )),
             parse_entry("Ke1=Value")
         );
     }
 
     #[test]
     fn shoul_parse_key() {
-        assert_eq!(Ok(("", Cow::from("Ke1"))), parse_key("Ke1"));
+        assert_eq!(Ok(("", Key::Simple(Cow::from("Ke1")))), parse_key("Ke1"));
     }
 
     fn example_file_groups() -> IndexMap<Cow<'static, str>, EntryMap<'static, 'static>> {
         indexmap! {
             Cow::from("Desktop Entry") => indexmap! {
-                Cow::from("Version") => Value::Numeric(1.0),
-                Cow::from("Type") => Value::String(Cow::from("Application")),
-                Cow::from("Name") => Value::String(Cow::from("Foo Viewer")),
-                Cow::from("Comment") => Value::String(Cow::from("The best viewer for Foo objects available!")),
-                Cow::from("TryExec") => Value::String(Cow::from("fooview")),
-                Cow::from("Exec") => Value::String(Cow::from("fooview %F")),
-                Cow::from("Icon") => Value::String(Cow::from("fooview")),
-                Cow::from("MimeType") => Value::String(Cow::from("image/x-foo;")),
-                Cow::from("Actions") => Value::String(Cow::from("Gallery;Create;")),
+                Key::Simple(Cow::from("Version")) => Value::Numeric(1.0),
+                Key::Simple(Cow::from("Type")) => Value::String(Cow::from("Application")),
+                Key::Simple(Cow::from("Name")) => Value::String(Cow::from("Foo Viewer")),
+                Key::Simple(Cow::from("Comment")) => Value::String(Cow::from("The best viewer for Foo objects available!")),
+                Key::Simple(Cow::from("TryExec")) => Value::String(Cow::from("fooview")),
+                Key::Simple(Cow::from("Exec")) => Value::String(Cow::from("fooview %F")),
+                Key::Simple(Cow::from("Icon")) => Value::String(Cow::from("fooview")),
+                Key::Simple(Cow::from("MimeType")) => Value::String(Cow::from("image/x-foo;")),
+                Key::Simple(Cow::from("Actions")) => Value::String(Cow::from("Gallery;Create;")),
             },
             Cow::from("Desktop Action Gallery") => indexmap! {
-                Cow::from("Exec") => Value::String(Cow::from("fooview --gallery")),
-                Cow::from("Name") => Value::String(Cow::from("Browse Gallery")),
+                Key::Simple(Cow::from("Exec")) => Value::String(Cow::from("fooview --gallery")),
+                Key::Simple(Cow::from("Name")) => Value::String(Cow::from("Browse Gallery")),
             },
             Cow::from("Desktop Action Create") => indexmap! {
-                Cow::from("Exec") => Value::String(Cow::from("fooview --create-new")),
-                Cow::from("Name") => Value::String(Cow::from("Create a new Foo!")),
-                Cow::from("Icon") => Value::String(Cow::from("fooview-new")),
+                Key::Simple(Cow::from("Exec")) => Value::String(Cow::from("fooview --create-new")),
+                Key::Simple(Cow::from("Name")) => Value::String(Cow::from("Create a new Foo!")),
+                Key::Simple(Cow::from("Icon")) => Value::String(Cow::from("fooview-new")),
             },
         }
     }
