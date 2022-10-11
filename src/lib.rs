@@ -408,6 +408,25 @@ mod test {
         assert_eq!(Ok(("", Key::Simple(Cow::from("Ke1")))), parse_key("Ke1"));
     }
 
+    #[test]
+    fn shoul_parse_localized_key() {
+        assert_eq!(
+            Ok((
+                "",
+                Key::Localized {
+                    key: Cow::from("Ke1"),
+                    locale: Locale {
+                        lang: Cow::from("sr"),
+                        country: Some(Cow::from("YU")),
+                        encoding: Some(Cow::from("UTF-8")),
+                        modifier: Some(Cow::from("Latin"))
+                    }
+                }
+            )),
+            parse_key("Ke1[sr_YU.UTF-8@Latin]")
+        );
+    }
+
     fn example_file_groups() -> IndexMap<Cow<'static, str>, EntryMap<'static, 'static>> {
         indexmap! {
             Cow::from("Desktop Entry") => indexmap! {
