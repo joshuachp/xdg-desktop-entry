@@ -1,5 +1,5 @@
 #[cfg(feature = "serde")]
-mod serde;
+pub mod serde;
 
 use std::{borrow::Cow, cell::Cell};
 

@@ -13,7 +13,7 @@ categories = ["parser-implementations"]
 [dependencies]
 indexmap = "1.9.1"
 nom = "7.1.1"
-serde = { version = "1.0.144", optional = true}
+serde = { version = "1.0.144", features = [ "derive" ], optional = true}
 
 [dev-dependencies]
 pretty_assertions = "1.3.0"

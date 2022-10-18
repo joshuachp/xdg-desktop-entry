@@ -34,6 +34,8 @@ pub enum Error {
     ExpectedMapEnd,
     ExpectedEnum,
     TrailingCharacters,
+    // Nesting maps not supported by the format
+    NestingNotSupported,
 }
 
 impl ser::Error for Error {
